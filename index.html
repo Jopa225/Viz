@@ -4,18 +4,57 @@
 
 <head>
     <script src="https://d3js.org/d3.v7.js"></script>
+    <script src="https://d3js.org/d3-scale-chromatic.v1.min.js"></script>
+    <script src="https://d3js.org/d3-geo-projection.v2.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3-legend/2.24.0/d3-legend.js"></script>
 </head> 
 
 <body>
     <script>
+    // Function for legend thresholds
+    function invertThresholdScale(scale, value) {
+        var domain = scale.domain();
+        var range = scale.range();
+        
+            if (value == 0) {
+                return 0;
+            }
+            if (value <= 40) {
+                return domain[0];
+            }
+            else if(value > 40 && value <= 80){
+                return domain[1];
+            }
+            else if(value > 80 && value <= 120){
+                return domain[2];
+            }
+            else if(value > 120 && value <= 160){
+                return domain[3];
+            }
+            else if(value > 160 && value <= 200){
+                return domain[4];
+            }
+            else if(value > 200 && value <= 240){
+                return domain[5];
+            }
+            else if(value > 240 && value <= 280){
+                return domain[6];
+            }
+            else if(value > 280){
+                return 2000000000;
+            }
+        return domain[domain.length - 1];
+    }
 
+    // World map svg
     let width = 700, height = 400
-    // The svg
     var svg = d3.select("body").append("svg")
         .attr("width", width)
         .attr("height", height)
+        .attr("transform", "translate(0, 30)")
         .style("background", "lightblue");
-        
+    
+
     // Map and projection
     var projection = d3.geoMercator()
         .scale(120)
@@ -25,21 +64,105 @@
     var pathGenerator = d3.geoPath()
         .projection(projection);
     
+    
     var data = new Map();
+    var urbanYear = new Map();
+    var urbanPop = new Map();
+    var thresholds = [0, 200000, 500000, 1000000, 2000000, 5000000, 10000000, 20000000, 50000000];
     var colorScale = d3.scaleThreshold()
-        .domain([100000, 1000000, 10000000, 30000000, 100000000, 500000000])
-        .range(d3.schemeBlues[7]);
+        .domain([200000, 500000, 1000000, 2000000, 5000000, 10000000, 20000000, 50000000])
+        .range(d3.schemeReds[thresholds.length - 1]);
 
-    // Load external data and boot
+    // Country info svg
+    var svgContainer = d3.select("body")
+        .append("svg")
+        .attr("width", 180)
+        .attr("height", 100)
+        .style("position", "absolute")
+        .style("left", "10px")
+        .style("top", "300px")
+        .style("background", "lightblue");
+
+    var legend = svg.append("g")
+        .attr("class", "legend")
+        .attr("transform", "translate(250,350)");
+
+    var legendTitle = legend.append("text")
+        .attr("class", "legend-title")
+        .attr("x", 0)
+        .attr("y", 0)
+        .text("Capital city population");
+
+    var legendScale = d3.scaleLinear()
+        .domain([0, thresholds.length - 1])
+        .range([0, 320]);
+
+    var legendAxis = d3.axisBottom(legendScale)
+        .tickValues(d3.range(thresholds.length))
+        .ticks(6)
+        .tickFormat(function(d){
+            return String(d3.format(".1s")(thresholds[d]));
+        });
+
+    legend.append("g")
+        .attr("class", "legend-axis")
+        .attr("transform", "translate(0, 10)")
+        .call(legendAxis);
+
+    // SVG container for the area chart
+    const margin = {top: 30, right: 30, bottom: 20, left: 50},
+        areaChartWidth = 700 - margin.left - margin.right,
+        areaChartHeight = 400 - margin.top - margin.bottom;
+
+    var areaChartSvg = d3.select("body")
+        .append("svg")
+        .attr("width", areaChartWidth + margin.left + margin.right)
+        .attr("height", areaChartHeight + margin.top + margin.bottom)
+        .append("g")
+        .attr("transform",`translate(${margin.left},${margin.top})`)
+
+    var titleMargin = { top: 30 };
+
+    // Create an SVG for the map title and chart title
+    var mapTitleSvg = d3.select("body")
+        .append("svg")
+        .attr("width", width)
+        .attr("height", titleMargin.top)
+        .attr("transform", "translate(0, -400)");
+
+    mapTitleSvg.append("text")
+        .attr("x", width / 2)
+        .attr("y", titleMargin.top / 2)
+        .attr("text-anchor", "middle")
+        .text("Number of people living in the capital city, 2018");
+
+    var areaChartTitleSvg = d3.select("body")
+        .append("svg")
+        .attr("width", areaChartWidth + margin.left + margin.right)
+        .attr("height", titleMargin.top);
+
+
+    // Load external data
     Promise.all([
     d3.json("worldmap.json"),
     d3.csv("capital-city-population.csv", function(d) {
-        data.set(d.Code, +d.Capital_city_population)
+        data.set(d.Code, +d.Capital_city_population);
+    }),
+    d3.csv("share-of-population-urban.csv", function(d) {
+        if (!urbanPop.has(d.Code)) {
+            urbanPop.set(d.Code, []);
+            urbanYear.set(d.Code, []);
+        }
+            urbanPop.get(d.Code).push(+d.Urbanpopulation);
+            urbanYear.get(d.Code).push(+d.Year);
         
-    })]).then(function(loadData){
+    })
+    ]).then(function(loadData){
         let topo = loadData[0]
+        let urbanData = loadData[2];
+
         console.log(data);
-        console.log(loadData[1].columns);
+        // Country mouseover
         let mouseOver = function(d) {
             d3.selectAll(".Country")
             .transition()
@@ -61,13 +184,69 @@
             .transition()
             .duration(200)
             .style("stroke", "transparent")
-        }
 
-        let click = function(d) {
-            d3.selectAll(".Country")
-            .on("click", function(d,i) {
-            // console.log(esports[1].country_names);
-            })
+        }
+        // show area chart on click and country info
+        let click = function(event, d) {
+            var countryName = d.properties.name;
+            var population = data.get(d.id);
+            var y_urban = urbanPop.get(d.id);
+            var x_year = urbanYear.get(d.id);
+
+            // Remove any existing elements
+            svgContainer.selectAll("*").remove();
+            areaChartSvg.selectAll("*").remove();
+            areaChartTitleSvg.selectAll("*").remove();
+
+            svgContainer.append("text")
+                .text("Country: " + countryName)
+                .attr("x", 10)
+                .attr("y", 20);
+
+            svgContainer.append("text")
+                .text("City pop: " + population)
+                .attr("x", 10)
+                .attr("y", 40);
+
+            
+            const x = d3.scaleLinear()
+                .domain([d3.min(x_year), d3.max(x_year)])
+                .range([ 0, areaChartWidth ]);
+                
+            areaChartSvg.append("g")
+                .attr("transform", `translate(0,${areaChartHeight})`)
+                .call(d3.axisBottom(x));
+
+            const y = d3.scaleLinear()
+                .domain([0, d3.max(y_urban)])
+                .range([ areaChartHeight, 0 ]);
+
+            areaChartSvg.append("g")
+                .call(d3.axisLeft(y));
+
+
+            var podaci = [];
+
+            for (var i = 0; i < x_year.length; i++) {
+                podaci.push({ x: x_year[i], y: y_urban[i] });
+            }
+
+            areaChartSvg.append("path")
+            .datum(podaci)
+            .attr("fill", "#cce5df")
+            .attr("stroke", "#69b3a2")
+            .attr("stroke-width", 1.5)
+            .attr("d", d3.area()
+                .x(function(d) { return x(d.x) })
+                .y0(y(0))
+                .y1(function(d) { return y(d.y) }))
+
+            areaChartTitleSvg.append("text")
+                .attr("x", (areaChartWidth + margin.left + margin.right) / 2)
+                .attr("y", titleMargin.top / 2)
+                .attr("text-anchor", "middle")
+                .text("Share of populations living in urban areas");
+
         }
 
         // Draw the map
@@ -87,10 +266,58 @@
                 .style("opacity", .8)
                 .on("mouseover", mouseOver )
                 .on("mouseleave", mouseLeave )    
-                .text(function(d,i){return "Capital_city_population: " + data.get(d.id);})
-                .on("click", function(d) {
-                    console.log(this.textContent);
-                    })
+                .on("click", click);
+
+    // Legend mouseover
+    var legendRects = legend.selectAll("rect")
+        .data(colorScale.range())
+        .enter()
+        .append("rect")
+        .attr("x", function(d, i) {
+            return i * 40;
+        })
+        .attr("y", 30)
+        .attr("width", 40)
+        .attr("height", 10)
+        .style("fill", function(d) {
+            return d;
+        })
+        .on("mouseover", function(d) {
+            var threshold = invertThresholdScale(colorScale, d3.select(this).attr("x"));
+            var threshold2 = invertThresholdScale(colorScale, +d3.select(this).attr("x") + 40);
+
+            d3.selectAll(".Country")
+                .transition()
+                .duration(200)
+                .style("opacity", function(d) {
+                    return (data.get(d.id) >= threshold && data.get(d.id) <= threshold2 ) ? 1 : 0.5;
+                });
+            d3.selectAll(".rect")
+            .transition()
+            .duration(200)
+            .style("opacity", .5)
+            d3.select(this)
+            .transition()
+            .duration(200)
+            .style("opacity", 1)
+            .style("stroke", "black")
+        })
+        .on("mouseout", function() {
+            d3.selectAll(".Country")
+            .transition()
+            .duration(200)
+            .style("opacity", 0.8);
+            
+            d3.selectAll(".rect")
+            .transition()
+            .duration(200)
+            .style("opacity", .8)
+            d3.select(this)
+            .transition()
+            .duration(200)
+            .style("stroke", "transparent")
+        });
+
     });
 
 
